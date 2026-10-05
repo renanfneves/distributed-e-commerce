@@ -1,0 +1,48 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: checkout
+spec:
+  selector:
+    matchLabels:
+      app: checkout
+
+  template:
+    metadata:
+      labels:
+        app: checkout
+    spec:
+      containers:
+        - name: checkout
+          image: renanfneves/e-commerce-checkout:1.0.0
+          ports:
+            - containerPort: 10001
+          env:
+            - name: PRODUCT_URL
+              value: "http://product-service:9999"
+            - name: RABBITMQ_ERLANG_COOKIE
+              value: "SWQOKODSQALRPCLNMEQG"
+            - name: RABBITMQ_DEFAULT_USER
+              value: "rabbitmq"
+            - name: RABBITMQ_DEFAULT_PASS
+              value: "rabbitmq"
+            - name: RABBITMQ_DEFAULT_VHOST
+              value: "/"
+            - name: RABBITMQ_DEFAULT_HOST
+              value: "rabbitmq-service"
+
+---
+
+apiVersion: v1
+kind: Service
+metadata:
+  name: checkout-service
+  labels:
+    app: checkout-service
+spec:
+  type: LoadBalancer
+  ports:
+    - protocol: TCP
+      port: 10001
+  selector:
+    app: checkout

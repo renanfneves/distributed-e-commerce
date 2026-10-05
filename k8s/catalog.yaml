@@ -1,0 +1,38 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: catalog
+spec:
+  selector:
+    matchLabels:
+      app: catalog
+
+  template:
+    metadata:
+      labels:
+        app: catalog
+    spec:
+      containers:
+        - name: catalog
+          image: renanfneves/e-commerce-catalog:1.0.0
+          ports:
+            - containerPort: 10000
+          env:
+            - name: PRODUCT_URL
+              value: "http://product-service:9999"
+
+---
+
+apiVersion: v1
+kind: Service
+metadata:
+  name: catalog-service
+  labels:
+    app: catalog-service
+spec:
+  type: LoadBalancer
+  ports:
+    - protocol: TCP
+      port: 10000
+  selector:
+    app: catalog
