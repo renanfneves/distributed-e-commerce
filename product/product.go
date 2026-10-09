@@ -1,60 +1,53 @@
 package main
 
 import (
-	"encoding/json"
+	"context"
+	"e-commerce/product/internal/database"
+	"e-commerce/product/internal/handlers"
+	"e-commerce/product/internal/services"
 	"fmt"
-	"io"
 	"log"
 	"net/http"
 	"os"
+	"time"
 
 	"github.com/gorilla/mux"
+	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/joho/godotenv"
 )
 
-type Product struct {
-	Uuid    string  `json:"uuid"`
-	Product string  `json:"product"`
-	Price   float64 `json:"price,string"`
-}
-
-type Products struct {
-	Products []Product `json:"products"`
-}
-
-func loadData() []byte {
-	jsonFile, err := os.Open("products.json")
-	if err != nil {
-		fmt.Println(err.Error())
-	}
-	defer jsonFile.Close()
-
-	data, err := io.ReadAll(jsonFile)
-	return data
-}
-
-func ListProducts(w http.ResponseWriter, r *http.Request) {
-	products := loadData()
-	w.Write([]byte(products))
-}
-
-func GetProductById(w http.ResponseWriter, r *http.Request) {
-	vars := mux.Vars(r)
-	data := loadData()
-
-	var products Products
-	json.Unmarshal(data, &products)
-
-	for _, v := range products.Products {
-		if v.Uuid == vars["id"] {
-			product, _ := json.Marshal(v)
-			w.Write([]byte(product))
-		}
-	}
-}
-
 func main() {
+	if err := godotenv.Load(); err != nil {
+		panic(err)
+	}
+
+	ctx := context.Background()
+	pool, err := pgxpool.New(ctx, fmt.Sprintf("user=%s password=%s host=%s port=%s dbname=%s",
+		os.Getenv("POSTGRES_USER"),
+		os.Getenv("POSTGRES_PASSWORD"),
+		os.Getenv("POSTGRES_HOST"),
+		os.Getenv("POSTGRES_PORT"),
+		os.Getenv("POSTGRES_DB"),
+	))
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer pool.Close()
+
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+
+	poolErr := pool.Ping(ctx)
+	if poolErr != nil {
+		log.Fatal(poolErr)
+	}
+
+	ps := services.NewProductService(pool, database.New(pool))
+	ph := handlers.NewProductHandler(ps)
+
 	r := mux.NewRouter()
-	r.HandleFunc("/products", ListProducts).Methods("GET")
-	r.HandleFunc("/products/{id}", GetProductById).Methods("GET")
+	r.HandleFunc("/products", ph.ListProducts).Methods("GET")
+	r.HandleFunc("/products/{id}", ph.GetProductById).Methods("GET")
+	r.HandleFunc("/products", ph.CreateProduct).Methods("POST")
 	log.Fatal(http.ListenAndServe(":9999", r), nil)
 }
