@@ -1,4 +1,3 @@
-version: '3'
 services:
 
   rabbit:
@@ -17,3 +16,84 @@ services:
     ports:
       - "6379:6379"
 
+
+  products_db:
+    image: postgres:18
+    restart: unless-stopped
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_USER: "PRODUCTSDB"
+      POSTGRES_PASSWORD: "PRODUCTSDB"
+      POSTGRES_DB: "products"
+    volumes:
+      - products_db_data:/var/lib/postgresql
+
+
+  orders_db:
+    image: postgres:18
+    restart: unless-stopped
+    ports:
+      - "5433:5432"
+    environment:
+      POSTGRES_USER: ORDERSDB
+      POSTGRES_PASSWORD: ORDERSDB
+      POSTGRES_DB: orders
+    volumes:
+      - orders_db_data:/var/lib/postgresql
+
+  payments_db:
+    image: postgres:18
+    restart: unless-stopped
+    ports:
+      - "5434:5432"
+    environment:
+      POSTGRES_USER: PAYMENTSDB
+      POSTGRES_PASSWORD: PAYMENTSDB
+      POSTGRES_DB: payments
+    volumes:
+      - payments_db_data:/var/lib/postgresql
+
+  inventory_db:
+    image: postgres:18
+    restart: unless-stopped
+    ports:
+      - "5435:5432"
+    environment:
+      POSTGRES_USER: INVENTORY
+      POSTGRES_PASSWORD: INVENTORY
+      POSTGRES_DB: inventory
+    volumes:
+      - inventory_db_data:/var/lib/postgresql
+
+  checkout_db:
+    image: postgres:18
+    restart: unless-stopped
+    ports:
+      - "5436:5432"
+    environment:
+      POSTGRES_USER: CHECKOUTDB
+      POSTGRES_PASSWORD: CHECKOUTDB
+      POSTGRES_DB: checkout
+    volumes:
+      - checkout_db_data:/var/lib/postgresql
+
+  ## Test Database Services
+
+  products_test_db:
+    image: postgres:18
+    restart: unless-stopped
+    ports:
+      - "5437:5432"
+    environment:
+      POSTGRES_USER: "PRODUCTSTEST"
+      POSTGRES_PASSWORD: "PRODUCTSTEST"
+      POSTGRES_DB: "products_test"
+
+
+volumes:
+  products_db_data:
+  orders_db_data:
+  payments_db_data:
+  inventory_db_data:
+  checkout_db_data:
