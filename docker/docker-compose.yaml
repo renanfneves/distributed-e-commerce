@@ -90,6 +90,15 @@ services:
       POSTGRES_PASSWORD: "PRODUCTSTEST"
       POSTGRES_DB: "products_test"
 
+  inventory_test_db:
+    image: postgres:18
+    restart: unless-stopped
+    ports:
+      - "5438:5432"
+    environment:
+      POSTGRES_USER: "INVENTORYTEST"
+      POSTGRES_PASSWORD: "INVENTORYTEST"
+      POSTGRES_DB: "inventory_test"
 
 volumes:
   products_db_data:
