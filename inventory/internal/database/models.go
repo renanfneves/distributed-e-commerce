@@ -5,11 +5,68 @@
 package database
 
 import (
+	"database/sql/driver"
+	"fmt"
+
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgtype"
 )
+
+type InventoryReservationStatus string
+
+const (
+	InventoryReservationStatusActive    InventoryReservationStatus = "active"
+	InventoryReservationStatusConfirmed InventoryReservationStatus = "confirmed"
+	InventoryReservationStatusReleased  InventoryReservationStatus = "released"
+)
+
+func (e *InventoryReservationStatus) Scan(src interface{}) error {
+	switch s := src.(type) {
+	case []byte:
+		*e = InventoryReservationStatus(s)
+	case string:
+		*e = InventoryReservationStatus(s)
+	default:
+		return fmt.Errorf("unsupported scan type for InventoryReservationStatus: %T", src)
+	}
+	return nil
+}
+
+type NullInventoryReservationStatus struct {
+	InventoryReservationStatus InventoryReservationStatus `json:"inventory_reservation_status"`
+	Valid                      bool                       `json:"valid"` // Valid is true if InventoryReservationStatus is not NULL
+}
+
+// Scan implements the Scanner interface.
+func (ns *NullInventoryReservationStatus) Scan(value interface{}) error {
+	if value == nil {
+		ns.InventoryReservationStatus, ns.Valid = "", false
+		return nil
+	}
+	ns.Valid = true
+	return ns.InventoryReservationStatus.Scan(value)
+}
+
+// Value implements the driver Valuer interface.
+func (ns NullInventoryReservationStatus) Value() (driver.Value, error) {
+	if !ns.Valid {
+		return nil, nil
+	}
+	return string(ns.InventoryReservationStatus), nil
+}
 
 type InventoryItem struct {
 	SkuID            uuid.UUID `json:"sku_id"`
 	QuantityOnHand   int64     `json:"quantity_on_hand"`
 	QuantityReserved int64     `json:"quantity_reserved"`
+}
+
+type InventoryReservation struct {
+	ReservationID uuid.UUID                  `json:"reservation_id"`
+	SkuID         uuid.UUID                  `json:"sku_id"`
+	Quantity      int64                      `json:"quantity"`
+	Status        InventoryReservationStatus `json:"status"`
+	CreatedAt     pgtype.Timestamptz         `json:"created_at"`
+	UpdatedAt     pgtype.Timestamptz         `json:"updated_at"`
+	OrderID       uuid.UUID                  `json:"order_id"`
 }

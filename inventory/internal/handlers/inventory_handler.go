@@ -1,6 +1,8 @@
 package handlers
 
 import (
+	"context"
+	"e-commerce/inventory/internal/database"
 	"e-commerce/inventory/internal/services"
 	"encoding/json"
 	"errors"
@@ -11,11 +13,41 @@ import (
 	"github.com/gorilla/mux"
 )
 
-type InventoryHandler struct {
-	service services.InventoryService
+func writeJSON(w http.ResponseWriter, status int, body any) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+
+	if body == nil {
+		return
+	}
+
+	if err := json.NewEncoder(w).Encode(body); err != nil {
+		log.Printf("erro ao escrever resposta JSON: %v", err)
+	}
 }
 
-func NewInventoryHandler(service services.InventoryService) InventoryHandler {
+type inventoryService interface {
+	CreateInventoryItem(
+		ctx context.Context,
+		input services.InventoryItemInput,
+	) (uuid.UUID, error)
+
+	GetInventoryItemBySKU(
+		ctx context.Context,
+		id uuid.UUID,
+	) (database.GetInventoryItemBySKURow, error)
+
+	CreateInventoryReservation(
+		ctx context.Context,
+		input services.InventoryReservationInput,
+	) (database.InventoryReservation, error)
+}
+
+type InventoryHandler struct {
+	service inventoryService
+}
+
+func NewInventoryHandler(service inventoryService) InventoryHandler {
 	return InventoryHandler{
 		service: service,
 	}
@@ -24,6 +56,10 @@ func NewInventoryHandler(service services.InventoryService) InventoryHandler {
 type AddItemRequest struct {
 	SkuID          uuid.UUID `json:"sku_id"`
 	QuantityOnHand int64     `json:"quantity_on_hand"`
+}
+
+type AddItemResponse struct {
+	InventoryItemID uuid.UUID `json:"id"`
 }
 
 func (h InventoryHandler) AddItemToInventory(w http.ResponseWriter, r *http.Request) {
@@ -40,28 +76,26 @@ func (h InventoryHandler) AddItemToInventory(w http.ResponseWriter, r *http.Requ
 	if svcErr != nil {
 		log.Printf("erro ao adicionar item ao inventário: %v", svcErr)
 		if errors.Is(svcErr, services.ErrInvalidQuantity) {
-			w.WriteHeader(http.StatusBadRequest)
+			writeJSON(w, http.StatusBadRequest, map[string]string{
+				"message": services.ErrInvalidQuantity.Error(),
+			})
+
 			return
 		}
 		if errors.Is(svcErr, services.ErrInventoryItemAlreadyExists) {
-			w.WriteHeader(http.StatusConflict)
-			if err := json.NewEncoder(w).Encode(map[string]string{
+			writeJSON(w, http.StatusConflict, map[string]string{
 				"message": "já existe um item de inventário para este SKU",
-			}); err != nil {
-				log.Printf("erro ao escrever resposta: %v", err)
-			}
+			})
 			return
 		}
 		w.WriteHeader(http.StatusInternalServerError)
 		return
 	}
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusCreated)
-	if err := json.NewEncoder(w).Encode(map[string]string{
-		"id": id.String(),
-	}); err != nil {
-		log.Printf("erro ao escrever resposta: %v", err)
-	}
+	writeJSON(w, http.StatusCreated,
+		AddItemResponse{
+			InventoryItemID: id,
+		})
+
 }
 
 func (h InventoryHandler) GetInventoryItemBySKU(w http.ResponseWriter, r *http.Request) {
@@ -84,9 +118,60 @@ func (h InventoryHandler) GetInventoryItemBySKU(w http.ResponseWriter, r *http.R
 		return
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusOK)
-	if err := json.NewEncoder(w).Encode(item); err != nil {
-		log.Printf("erro ao escrever resposta: %v", err)
+	writeJSON(w, http.StatusOK, item)
+}
+
+type CreateInventoryReservationRequest struct {
+	ReservationID uuid.UUID `json:"reservation_id"`
+	OrderID       uuid.UUID `json:"order_id"`
+	SkuID         uuid.UUID `json:"sku_id"`
+	Quantity      int64     `json:"quantity"`
+}
+
+type CreateInventoryReservationResponse struct {
+	ReservationID uuid.UUID `json:"reservation_id"`
+	OrderID       uuid.UUID `json:"order_id"`
+	SkuID         uuid.UUID `json:"sku_id"`
+	Quantity      int64     `json:"quantity"`
+	Status        string    `json:"status"`
+}
+
+func (h InventoryHandler) CreateInventoryReservation(w http.ResponseWriter, r *http.Request) {
+	var body CreateInventoryReservationRequest
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil ||
+		body.ReservationID == uuid.Nil ||
+		body.OrderID == uuid.Nil ||
+		body.SkuID == uuid.Nil ||
+		body.Quantity <= 0 {
+		w.WriteHeader(http.StatusBadRequest)
+		return
 	}
+	response, err := h.service.CreateInventoryReservation(r.Context(), services.InventoryReservationInput{
+		ReservationID: body.ReservationID,
+		OrderID:       body.OrderID,
+		SkuID:         body.SkuID,
+		Quantity:      body.Quantity,
+	})
+	if err != nil {
+		if errors.Is(err, services.ErrInvalidReservationInput) {
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		if errors.Is(err, services.ErrReservationIdempotencyConflict) ||
+			errors.Is(err, services.ErrInventoryReservationRejected) {
+			w.WriteHeader(http.StatusConflict)
+			return
+		}
+		w.WriteHeader(http.StatusInternalServerError)
+		log.Printf("erro ao criar reserva de inventário: %v", err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, CreateInventoryReservationResponse{
+		ReservationID: response.ReservationID,
+		OrderID:       response.OrderID,
+		SkuID:         response.SkuID,
+		Quantity:      response.Quantity,
+		Status:        string(response.Status),
+	})
+
 }

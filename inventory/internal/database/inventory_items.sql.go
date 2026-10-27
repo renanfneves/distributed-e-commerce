@@ -77,3 +77,43 @@ func (q *Queries) GetInventoryItemBySKU(ctx context.Context, skuID uuid.UUID) (G
 	)
 	return i, err
 }
+
+const reserveInventory = `-- name: ReserveInventory :one
+UPDATE
+    inventory_items
+SET
+    quantity_reserved = quantity_reserved + $1
+WHERE
+    sku_id = $2
+    AND $1::bigint > 0
+    AND quantity_on_hand - quantity_reserved >= $1
+RETURNING
+    sku_id,
+    quantity_on_hand,
+    quantity_reserved,
+    (quantity_on_hand - quantity_reserved)::bigint AS quantity_available
+`
+
+type ReserveInventoryParams struct {
+	QuantityReserved int64     `json:"quantity_reserved"`
+	SkuID            uuid.UUID `json:"sku_id"`
+}
+
+type ReserveInventoryRow struct {
+	SkuID             uuid.UUID `json:"sku_id"`
+	QuantityOnHand    int64     `json:"quantity_on_hand"`
+	QuantityReserved  int64     `json:"quantity_reserved"`
+	QuantityAvailable int64     `json:"quantity_available"`
+}
+
+func (q *Queries) ReserveInventory(ctx context.Context, arg ReserveInventoryParams) (ReserveInventoryRow, error) {
+	row := q.db.QueryRow(ctx, reserveInventory, arg.QuantityReserved, arg.SkuID)
+	var i ReserveInventoryRow
+	err := row.Scan(
+		&i.SkuID,
+		&i.QuantityOnHand,
+		&i.QuantityReserved,
+		&i.QuantityAvailable,
+	)
+	return i, err
+}

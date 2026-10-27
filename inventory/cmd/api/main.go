@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"e-commerce/inventory/internal/database"
 	"e-commerce/inventory/internal/handlers"
 	"e-commerce/inventory/internal/services"
 	"fmt"
@@ -42,12 +41,13 @@ func main() {
 		log.Fatal(poolErr)
 	}
 
-	is := services.NewInventoryService(database.New(pool))
+	is := services.NewInventoryService(pool)
 	ih := handlers.NewInventoryHandler(is)
 
 	r := mux.NewRouter()
-	r.HandleFunc("/inventory/{id}", ih.GetInventoryItemBySKU).Methods("GET")
 	r.HandleFunc("/inventory", ih.AddItemToInventory).Methods("POST")
+	r.HandleFunc("/inventory/reservations", ih.CreateInventoryReservation).Methods("POST")
+	r.HandleFunc("/inventory/{id}", ih.GetInventoryItemBySKU).Methods("GET")
 	log.Fatal(http.ListenAndServe(":9998", r))
 
 }
