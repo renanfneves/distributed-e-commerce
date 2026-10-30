@@ -41,6 +41,11 @@ type inventoryService interface {
 		ctx context.Context,
 		input services.InventoryReservationInput,
 	) (database.InventoryReservation, error)
+
+	ReleaseInventoryReservation(
+		ctx context.Context,
+		reservationID uuid.UUID,
+	) (database.InventoryReservation, error)
 }
 
 type InventoryHandler struct {
@@ -128,7 +133,7 @@ type CreateInventoryReservationRequest struct {
 	Quantity      int64     `json:"quantity"`
 }
 
-type CreateInventoryReservationResponse struct {
+type InventoryReservationResponse struct {
 	ReservationID uuid.UUID `json:"reservation_id"`
 	OrderID       uuid.UUID `json:"order_id"`
 	SkuID         uuid.UUID `json:"sku_id"`
@@ -166,7 +171,7 @@ func (h InventoryHandler) CreateInventoryReservation(w http.ResponseWriter, r *h
 		log.Printf("erro ao criar reserva de inventário: %v", err)
 		return
 	}
-	writeJSON(w, http.StatusCreated, CreateInventoryReservationResponse{
+	writeJSON(w, http.StatusCreated, InventoryReservationResponse{
 		ReservationID: response.ReservationID,
 		OrderID:       response.OrderID,
 		SkuID:         response.SkuID,
@@ -174,4 +179,38 @@ func (h InventoryHandler) CreateInventoryReservation(w http.ResponseWriter, r *h
 		Status:        string(response.Status),
 	})
 
+}
+
+func (h InventoryHandler) ReleaseInventoryReservation(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	reservationID, err := uuid.Parse(vars["id"])
+	if err != nil {
+		w.WriteHeader(http.StatusBadRequest)
+		return
+	}
+	reservation, err := h.service.ReleaseInventoryReservation(r.Context(), reservationID)
+	if err != nil {
+		if errors.Is(err, services.ErrInvalidReservationInput) {
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		if errors.Is(err, services.ErrInventoryReservationNotFound) {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		if errors.Is(err, services.ErrInventoryReservationTransitionConflict) {
+			w.WriteHeader(http.StatusConflict)
+			return
+		}
+		log.Printf("erro ao liberar reserva de inventário: %v", err)
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, http.StatusOK, InventoryReservationResponse{
+		ReservationID: reservation.ReservationID,
+		OrderID:       reservation.OrderID,
+		SkuID:         reservation.SkuID,
+		Quantity:      reservation.Quantity,
+		Status:        string(reservation.Status),
+	})
 }

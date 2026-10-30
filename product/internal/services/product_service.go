@@ -17,10 +17,10 @@ type ProductService struct {
 
 var ErrProductNotFound = errors.New("product not found")
 
-func NewProductService(pool *pgxpool.Pool, queries *database.Queries) ProductService {
+func NewProductService(pool *pgxpool.Pool) ProductService {
 	return ProductService{
 		pool:    pool,
-		queries: queries,
+		queries: database.New(pool),
 	}
 }
 

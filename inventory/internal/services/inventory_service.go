@@ -4,6 +4,7 @@ import (
 	"context"
 	"e-commerce/inventory/internal/database"
 	"errors"
+	"fmt"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -22,6 +23,8 @@ var ErrInventoryItemAlreadyExists = errors.New("inventory item already exists")
 var ErrInventoryReservationRejected = errors.New("inventory reservation rejected")
 var ErrInvalidReservationInput = errors.New("invalid reservation input")
 var ErrReservationIdempotencyConflict = errors.New("reservation idempotency conflict")
+var ErrInventoryReservationNotFound = errors.New("inventory reservation not found")
+var ErrInventoryReservationTransitionConflict = errors.New("inventory reservation transition conflict")
 
 func NewInventoryService(pool *pgxpool.Pool) InventoryService {
 	return InventoryService{
@@ -166,4 +169,63 @@ func (s InventoryService) CreateInventoryReservation(ctx context.Context, input 
 		return database.InventoryReservation{}, err
 	}
 	return reservation, nil
+}
+
+func (s InventoryService) ReleaseInventoryReservation(
+	ctx context.Context,
+	reservationID uuid.UUID,
+) (database.InventoryReservation, error) {
+	if reservationID == uuid.Nil {
+		return database.InventoryReservation{}, ErrInvalidReservationInput
+	}
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return database.InventoryReservation{}, err
+	}
+	defer tx.Rollback(ctx)
+	txQueries := s.queries.WithTx(tx)
+
+	reservation, err := txQueries.GetInventoryReservationByIDForUpdate(ctx, reservationID)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return database.InventoryReservation{}, ErrInventoryReservationNotFound
+		}
+		return database.InventoryReservation{}, err
+	}
+
+	switch reservation.Status {
+	case database.InventoryReservationStatusConfirmed:
+		return database.InventoryReservation{},
+			ErrInventoryReservationTransitionConflict
+
+	case database.InventoryReservationStatusReleased:
+		if err := tx.Commit(ctx); err != nil {
+			return database.InventoryReservation{}, err
+		}
+		return reservation, nil
+
+	case database.InventoryReservationStatusActive:
+		_, err = txQueries.ReleaseReservedInventory(ctx, database.ReleaseReservedInventoryParams{
+			SkuID:    reservation.SkuID,
+			Quantity: reservation.Quantity,
+		})
+		if err != nil {
+			return database.InventoryReservation{}, err
+		}
+		releasedReservation, err := txQueries.MarkInventoryReservationReleased(ctx, reservationID)
+		if err != nil {
+			return database.InventoryReservation{}, err
+		}
+		if err := tx.Commit(ctx); err != nil {
+			return database.InventoryReservation{}, err
+		}
+		return releasedReservation, nil
+
+	default:
+		return database.InventoryReservation{},
+			fmt.Errorf(
+				"unexpected inventory reservation status: %s",
+				reservation.Status,
+			)
+	}
 }

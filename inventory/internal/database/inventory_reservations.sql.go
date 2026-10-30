@@ -91,3 +91,68 @@ func (q *Queries) GetInventoryReservationByID(ctx context.Context, reservationID
 	)
 	return i, err
 }
+
+const getInventoryReservationByIDForUpdate = `-- name: GetInventoryReservationByIDForUpdate :one
+SELECT
+    reservation_id,
+    sku_id,
+    quantity,
+    status,
+    created_at,
+    updated_at,
+    order_id
+FROM
+    inventory_reservations
+WHERE
+    reservation_id = $1
+FOR UPDATE
+`
+
+func (q *Queries) GetInventoryReservationByIDForUpdate(ctx context.Context, reservationID uuid.UUID) (InventoryReservation, error) {
+	row := q.db.QueryRow(ctx, getInventoryReservationByIDForUpdate, reservationID)
+	var i InventoryReservation
+	err := row.Scan(
+		&i.ReservationID,
+		&i.SkuID,
+		&i.Quantity,
+		&i.Status,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.OrderID,
+	)
+	return i, err
+}
+
+const markInventoryReservationReleased = `-- name: MarkInventoryReservationReleased :one
+UPDATE
+    inventory_reservations
+SET
+    status = 'released',
+    updated_at = NOW()
+WHERE
+    reservation_id = $1
+  AND status = 'active'
+RETURNING
+    reservation_id,
+    sku_id,
+    quantity,
+    status,
+    created_at,
+    updated_at,
+    order_id
+`
+
+func (q *Queries) MarkInventoryReservationReleased(ctx context.Context, reservationID uuid.UUID) (InventoryReservation, error) {
+	row := q.db.QueryRow(ctx, markInventoryReservationReleased, reservationID)
+	var i InventoryReservation
+	err := row.Scan(
+		&i.ReservationID,
+		&i.SkuID,
+		&i.Quantity,
+		&i.Status,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.OrderID,
+	)
+	return i, err
+}

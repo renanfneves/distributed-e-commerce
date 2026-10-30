@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"e-commerce/product/internal/database"
 	"e-commerce/product/internal/handlers"
 	"e-commerce/product/internal/services"
 	"fmt"
@@ -42,7 +41,7 @@ func main() {
 		log.Fatal(poolErr)
 	}
 
-	ps := services.NewProductService(pool, database.New(pool))
+	ps := services.NewProductService(pool)
 	ph := handlers.NewProductHandler(ps)
 
 	r := mux.NewRouter()

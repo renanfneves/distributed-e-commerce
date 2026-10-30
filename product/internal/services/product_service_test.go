@@ -7,7 +7,6 @@ import (
 	"testing"
 	"time"
 
-	"e-commerce/product/internal/database"
 	"e-commerce/product/internal/services"
 
 	"github.com/google/uuid"
@@ -51,7 +50,7 @@ func cleanupProducts(t *testing.T, pool *pgxpool.Pool, names ...string) {
 
 func TestCreateProductIntegrationSuccess(t *testing.T) {
 	pool := integrationPool(t)
-	service := services.NewProductService(pool, database.New(pool))
+	service := services.NewProductService(pool)
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	suffix := uuid.NewString()
@@ -97,7 +96,7 @@ func TestCreateProductIntegrationSuccess(t *testing.T) {
 
 func TestCreateProductIntegrationRollback(t *testing.T) {
 	pool := integrationPool(t)
-	service := services.NewProductService(pool, database.New(pool))
+	service := services.NewProductService(pool)
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	suffix := uuid.NewString()

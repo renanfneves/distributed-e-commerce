@@ -47,6 +47,7 @@ func main() {
 	r := mux.NewRouter()
 	r.HandleFunc("/inventory", ih.AddItemToInventory).Methods("POST")
 	r.HandleFunc("/inventory/reservations", ih.CreateInventoryReservation).Methods("POST")
+	r.HandleFunc("/inventory/reservations/{id}/release", ih.ReleaseInventoryReservation).Methods(http.MethodPost)
 	r.HandleFunc("/inventory/{id}", ih.GetInventoryItemBySKU).Methods("GET")
 	log.Fatal(http.ListenAndServe(":9998", r))
 
