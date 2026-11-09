@@ -16,13 +16,15 @@ INSERT INTO inventory_reservations (
     reservation_id,
     order_id,
     sku_id,
-    quantity
+    quantity,
+    expires_at
 )
 VALUES (
     $1,
     $2,
     $3,
-    $4
+    $4,
+    NOW() + $5::bigint * INTERVAL '1 second'
 )
 ON CONFLICT (reservation_id) DO NOTHING
 RETURNING
@@ -32,7 +34,8 @@ RETURNING
     status,
     created_at,
     updated_at,
-    order_id
+    order_id,
+    expires_at
 `
 
 type CreateInventoryReservationParams struct {
@@ -40,6 +43,7 @@ type CreateInventoryReservationParams struct {
 	OrderID       uuid.UUID `json:"order_id"`
 	SkuID         uuid.UUID `json:"sku_id"`
 	Quantity      int64     `json:"quantity"`
+	TtlSeconds    int64     `json:"ttl_seconds"`
 }
 
 func (q *Queries) CreateInventoryReservation(ctx context.Context, arg CreateInventoryReservationParams) (InventoryReservation, error) {
@@ -48,6 +52,7 @@ func (q *Queries) CreateInventoryReservation(ctx context.Context, arg CreateInve
 		arg.OrderID,
 		arg.SkuID,
 		arg.Quantity,
+		arg.TtlSeconds,
 	)
 	var i InventoryReservation
 	err := row.Scan(
@@ -58,6 +63,7 @@ func (q *Queries) CreateInventoryReservation(ctx context.Context, arg CreateInve
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.OrderID,
+		&i.ExpiresAt,
 	)
 	return i, err
 }
@@ -70,7 +76,8 @@ SELECT
     status,
     created_at,
     updated_at,
-    order_id
+    order_id,
+    expires_at
 FROM
     inventory_reservations
 WHERE
@@ -88,6 +95,7 @@ func (q *Queries) GetInventoryReservationByID(ctx context.Context, reservationID
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.OrderID,
+		&i.ExpiresAt,
 	)
 	return i, err
 }
@@ -100,7 +108,8 @@ SELECT
     status,
     created_at,
     updated_at,
-    order_id
+    order_id,
+    expires_at
 FROM
     inventory_reservations
 WHERE
@@ -119,6 +128,78 @@ func (q *Queries) GetInventoryReservationByIDForUpdate(ctx context.Context, rese
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.OrderID,
+		&i.ExpiresAt,
+	)
+	return i, err
+}
+
+const listExpiredActiveReservationIDs = `-- name: ListExpiredActiveReservationIDs :many
+SELECT
+    reservation_id
+FROM
+    inventory_reservations
+WHERE
+    status = 'active'
+    AND expires_at <= NOW()
+ORDER BY
+    expires_at ASC,
+    reservation_id ASC
+LIMIT $1::int
+`
+
+func (q *Queries) ListExpiredActiveReservationIDs(ctx context.Context, batchSize int32) ([]uuid.UUID, error) {
+	rows, err := q.db.Query(ctx, listExpiredActiveReservationIDs, batchSize)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []uuid.UUID
+	for rows.Next() {
+		var reservation_id uuid.UUID
+		if err := rows.Scan(&reservation_id); err != nil {
+			return nil, err
+		}
+		items = append(items, reservation_id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const markInventoryReservationConfirmed = `-- name: MarkInventoryReservationConfirmed :one
+UPDATE
+    inventory_reservations
+SET
+    status = 'confirmed',
+    updated_at = NOW()
+WHERE
+    reservation_id = $1
+    AND status = 'active'
+    AND expires_at > NOW()
+RETURNING
+    reservation_id,
+    sku_id,
+    quantity,
+    status,
+    created_at,
+    updated_at,
+    order_id,
+    expires_at
+`
+
+func (q *Queries) MarkInventoryReservationConfirmed(ctx context.Context, reservationID uuid.UUID) (InventoryReservation, error) {
+	row := q.db.QueryRow(ctx, markInventoryReservationConfirmed, reservationID)
+	var i InventoryReservation
+	err := row.Scan(
+		&i.ReservationID,
+		&i.SkuID,
+		&i.Quantity,
+		&i.Status,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.OrderID,
+		&i.ExpiresAt,
 	)
 	return i, err
 }
@@ -139,7 +220,8 @@ RETURNING
     status,
     created_at,
     updated_at,
-    order_id
+    order_id,
+    expires_at
 `
 
 func (q *Queries) MarkInventoryReservationReleased(ctx context.Context, reservationID uuid.UUID) (InventoryReservation, error) {
@@ -153,6 +235,7 @@ func (q *Queries) MarkInventoryReservationReleased(ctx context.Context, reservat
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.OrderID,
+		&i.ExpiresAt,
 	)
 	return i, err
 }

@@ -50,3 +50,20 @@ RETURNING
     quantity_on_hand,
     quantity_reserved,
     (quantity_on_hand - quantity_reserved)::bigint AS quantity_available;
+
+-- name: ConfirmReservedInventory :one
+UPDATE
+    inventory_items
+SET
+    quantity_on_hand = quantity_on_hand - sqlc.arg(quantity)::bigint,
+    quantity_reserved = quantity_reserved - sqlc.arg(quantity)::bigint
+WHERE
+    sku_id = sqlc.arg(sku_id)
+    AND sqlc.arg(quantity)::bigint > 0
+    AND quantity_on_hand >= sqlc.arg(quantity)::bigint
+    AND quantity_reserved >= sqlc.arg(quantity)::bigint
+RETURNING
+    sku_id,
+    quantity_on_hand,
+    quantity_reserved,
+    (quantity_on_hand - quantity_reserved)::bigint AS quantity_available;

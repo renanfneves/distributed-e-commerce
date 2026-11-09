@@ -11,9 +11,11 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/gorilla/mux"
+	"github.com/jackc/pgx/v5/pgtype"
 )
 
 type fakeInventoryService struct {
@@ -21,6 +23,7 @@ type fakeInventoryService struct {
 	getInventoryItemBySKUFn       func(context.Context, uuid.UUID) (database.GetInventoryItemBySKURow, error)
 	createInventoryReservationFn  func(context.Context, services.InventoryReservationInput) (database.InventoryReservation, error)
 	releaseInventoryReservationFn func(context.Context, uuid.UUID) (database.InventoryReservation, error)
+	confirmInventoryReservationFn func(context.Context, uuid.UUID) (database.InventoryReservation, error)
 }
 
 func (f fakeInventoryService) CreateInventoryItem(
@@ -63,6 +66,16 @@ func (f fakeInventoryService) ReleaseInventoryReservation(
 	return f.releaseInventoryReservationFn(ctx, reservationID)
 }
 
+func (f fakeInventoryService) ConfirmInventoryReservation(
+	ctx context.Context,
+	reservationID uuid.UUID,
+) (database.InventoryReservation, error) {
+	if f.confirmInventoryReservationFn == nil {
+		panic("chamada inesperada a ConfirmInventoryReservation")
+	}
+	return f.confirmInventoryReservationFn(ctx, reservationID)
+}
+
 func reservationRequest(
 	t *testing.T,
 	body handlers.CreateInventoryReservationRequest,
@@ -92,7 +105,24 @@ func releaseReservationRequest(reservationID string) *http.Request {
 	})
 }
 
+func confirmReservationRequest(reservationID string) *http.Request {
+	request := httptest.NewRequest(
+		http.MethodPost,
+		"/inventory/reservations/"+reservationID+"/confirm",
+		nil,
+	)
+	return mux.SetURLVars(request, map[string]string{
+		"id": reservationID,
+	})
+}
+
 func TestCreateInventoryReservationSuccess(t *testing.T) {
+	// Arrange
+	expiresAt := time.Date(
+		2026, time.October, 30,
+		12, 15, 0, 0,
+		time.UTC,
+	)
 	requestBody := handlers.CreateInventoryReservationRequest{
 		ReservationID: uuid.New(),
 		OrderID:       uuid.New(),
@@ -105,6 +135,10 @@ func TestCreateInventoryReservationSuccess(t *testing.T) {
 		SkuID:         requestBody.SkuID,
 		Quantity:      requestBody.Quantity,
 		Status:        database.InventoryReservationStatusActive,
+		ExpiresAt: pgtype.Timestamptz{
+			Time:  expiresAt,
+			Valid: true,
+		},
 	}
 
 	var gotInput services.InventoryReservationInput
@@ -122,11 +156,13 @@ func TestCreateInventoryReservationSuccess(t *testing.T) {
 	handler := handlers.NewInventoryHandler(service)
 	recorder := httptest.NewRecorder()
 
+	// Act
 	handler.CreateInventoryReservation(
 		recorder,
 		reservationRequest(t, requestBody),
 	)
 
+	// Assert
 	if recorder.Code != http.StatusCreated {
 		t.Errorf(
 			"status HTTP = %d; esperado %d",
@@ -164,6 +200,7 @@ func TestCreateInventoryReservationSuccess(t *testing.T) {
 		SkuID:         wantReservation.SkuID,
 		Quantity:      wantReservation.Quantity,
 		Status:        string(wantReservation.Status),
+		ExpiresAt:     expiresAt,
 	}
 	if response != wantResponse {
 		t.Errorf("resposta = %+v; esperado %+v", response, wantResponse)
@@ -236,12 +273,14 @@ func TestCreateInventoryReservationInvalidRequest(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			// O fake sem função configurada entra em panic se o handler chamar o serviço.
+			// Arrange
 			handler := handlers.NewInventoryHandler(fakeInventoryService{})
 			recorder := httptest.NewRecorder()
 
+			// Act
 			handler.CreateInventoryReservation(recorder, test.request(t))
 
+			// Assert
 			if recorder.Code != http.StatusBadRequest {
 				t.Errorf(
 					"status HTTP = %d; esperado %d",
@@ -293,6 +332,7 @@ func TestCreateInventoryReservationServiceErrors(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
+			// Arrange
 			serviceCalls := 0
 			service := fakeInventoryService{
 				createInventoryReservationFn: func(
@@ -306,11 +346,13 @@ func TestCreateInventoryReservationServiceErrors(t *testing.T) {
 			handler := handlers.NewInventoryHandler(service)
 			recorder := httptest.NewRecorder()
 
+			// Act
 			handler.CreateInventoryReservation(
 				recorder,
 				reservationRequest(t, requestBody),
 			)
 
+			// Assert
 			if recorder.Code != test.wantStatus {
 				t.Errorf(
 					"status HTTP = %d; esperado %d",
@@ -329,13 +371,23 @@ func TestCreateInventoryReservationServiceErrors(t *testing.T) {
 }
 
 func TestReleaseInventoryReservationSuccess(t *testing.T) {
+	// Arrange
 	reservationID := uuid.New()
+	expiresAt := time.Date(
+		2026, time.October, 30,
+		12, 15, 0, 0,
+		time.UTC,
+	)
 	wantReservation := database.InventoryReservation{
 		ReservationID: reservationID,
 		OrderID:       uuid.New(),
 		SkuID:         uuid.New(),
 		Quantity:      4,
 		Status:        database.InventoryReservationStatusReleased,
+		ExpiresAt: pgtype.Timestamptz{
+			Time:  expiresAt,
+			Valid: true,
+		},
 	}
 
 	serviceCalls := 0
@@ -353,11 +405,13 @@ func TestReleaseInventoryReservationSuccess(t *testing.T) {
 	handler := handlers.NewInventoryHandler(service)
 	recorder := httptest.NewRecorder()
 
+	// Act
 	handler.ReleaseInventoryReservation(
 		recorder,
 		releaseReservationRequest(reservationID.String()),
 	)
 
+	// Assert
 	if recorder.Code != http.StatusOK {
 		t.Errorf(
 			"status HTTP = %d; esperado %d",
@@ -393,6 +447,7 @@ func TestReleaseInventoryReservationSuccess(t *testing.T) {
 		SkuID:         wantReservation.SkuID,
 		Quantity:      wantReservation.Quantity,
 		Status:        string(wantReservation.Status),
+		ExpiresAt:     expiresAt,
 	}
 	if response != wantResponse {
 		t.Errorf("resposta = %+v; esperado %+v", response, wantResponse)
@@ -400,15 +455,17 @@ func TestReleaseInventoryReservationSuccess(t *testing.T) {
 }
 
 func TestReleaseInventoryReservationInvalidID(t *testing.T) {
-	// O fake sem função configurada entra em panic se o handler chamar o serviço.
+	// Arrange
 	handler := handlers.NewInventoryHandler(fakeInventoryService{})
 	recorder := httptest.NewRecorder()
 
+	// Act
 	handler.ReleaseInventoryReservation(
 		recorder,
 		releaseReservationRequest("id-invalido"),
 	)
 
+	// Assert
 	if recorder.Code != http.StatusBadRequest {
 		t.Errorf(
 			"status HTTP = %d; esperado %d",
@@ -451,6 +508,7 @@ func TestReleaseInventoryReservationServiceErrors(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
+			// Arrange
 			reservationID := uuid.New()
 			serviceCalls := 0
 			var gotReservationID uuid.UUID
@@ -467,11 +525,13 @@ func TestReleaseInventoryReservationServiceErrors(t *testing.T) {
 			handler := handlers.NewInventoryHandler(service)
 			recorder := httptest.NewRecorder()
 
+			// Act
 			handler.ReleaseInventoryReservation(
 				recorder,
 				releaseReservationRequest(reservationID.String()),
 			)
 
+			// Assert
 			if recorder.Code != test.wantStatus {
 				t.Errorf(
 					"status HTTP = %d; esperado %d",
@@ -491,6 +551,127 @@ func TestReleaseInventoryReservationServiceErrors(t *testing.T) {
 			}
 			if recorder.Body.Len() != 0 {
 				t.Errorf("corpo da resposta = %q; esperado vazio", recorder.Body.String())
+			}
+		})
+	}
+}
+
+func TestConfirmInventoryReservationSuccess(t *testing.T) {
+	// Arrange
+	reservationID := uuid.New()
+	expiresAt := time.Date(2026, time.October, 31, 12, 15, 0, 0, time.UTC)
+	wantReservation := database.InventoryReservation{
+		ReservationID: reservationID,
+		OrderID:       uuid.New(),
+		SkuID:         uuid.New(),
+		Quantity:      4,
+		Status:        database.InventoryReservationStatusConfirmed,
+		ExpiresAt: pgtype.Timestamptz{
+			Time:  expiresAt,
+			Valid: true,
+		},
+	}
+
+	var gotID uuid.UUID
+	serviceCalls := 0
+	service := fakeInventoryService{
+		confirmInventoryReservationFn: func(
+			_ context.Context,
+			id uuid.UUID,
+		) (database.InventoryReservation, error) {
+			serviceCalls++
+			gotID = id
+			return wantReservation, nil
+		},
+	}
+	recorder := httptest.NewRecorder()
+
+	// Act
+	handlers.NewInventoryHandler(service).ConfirmInventoryReservation(
+		recorder,
+		confirmReservationRequest(reservationID.String()),
+	)
+
+	// Assert
+	if recorder.Code != http.StatusOK {
+		t.Errorf("status HTTP = %d; esperado %d", recorder.Code, http.StatusOK)
+	}
+	if serviceCalls != 1 {
+		t.Errorf("chamadas ao serviço = %d; esperado 1", serviceCalls)
+	}
+	if gotID != reservationID {
+		t.Errorf("reservation_id recebido = %s; esperado %s", gotID, reservationID)
+	}
+	var response handlers.InventoryReservationResponse
+	if err := json.NewDecoder(recorder.Body).Decode(&response); err != nil {
+		t.Fatalf("decodificar resposta de confirmação: %v", err)
+	}
+	wantResponse := handlers.InventoryReservationResponse{
+		ReservationID: wantReservation.ReservationID,
+		OrderID:       wantReservation.OrderID,
+		SkuID:         wantReservation.SkuID,
+		Quantity:      wantReservation.Quantity,
+		Status:        string(wantReservation.Status),
+		ExpiresAt:     expiresAt,
+	}
+	if response != wantResponse {
+		t.Errorf("resposta = %+v; esperado %+v", response, wantResponse)
+	}
+}
+
+func TestConfirmInventoryReservationInvalidID(t *testing.T) {
+	// Arrange
+	handler := handlers.NewInventoryHandler(fakeInventoryService{})
+	recorder := httptest.NewRecorder()
+
+	// Act
+	handler.ConfirmInventoryReservation(
+		recorder,
+		confirmReservationRequest("id-invalido"),
+	)
+
+	// Assert
+	if recorder.Code != http.StatusBadRequest {
+		t.Errorf("status HTTP = %d; esperado %d", recorder.Code, http.StatusBadRequest)
+	}
+}
+
+func TestConfirmInventoryReservationServiceErrors(t *testing.T) {
+	tests := []struct {
+		name       string
+		serviceErr error
+		wantStatus int
+	}{
+		{name: "input inválido", serviceErr: services.ErrInvalidReservationInput, wantStatus: http.StatusBadRequest},
+		{name: "reserva inexistente", serviceErr: services.ErrInventoryReservationNotFound, wantStatus: http.StatusNotFound},
+		{name: "reserva liberada", serviceErr: services.ErrInventoryReservationTransitionConflict, wantStatus: http.StatusConflict},
+		{name: "reserva expirada", serviceErr: services.ErrInventoryReservationExpired, wantStatus: http.StatusConflict},
+		{name: "erro interno", serviceErr: errors.New("database unavailable"), wantStatus: http.StatusInternalServerError},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			// Arrange
+			reservationID := uuid.New()
+			service := fakeInventoryService{
+				confirmInventoryReservationFn: func(
+					_ context.Context,
+					_ uuid.UUID,
+				) (database.InventoryReservation, error) {
+					return database.InventoryReservation{}, test.serviceErr
+				},
+			}
+			recorder := httptest.NewRecorder()
+
+			// Act
+			handlers.NewInventoryHandler(service).ConfirmInventoryReservation(
+				recorder,
+				confirmReservationRequest(reservationID.String()),
+			)
+
+			// Assert
+			if recorder.Code != test.wantStatus {
+				t.Errorf("status HTTP = %d; esperado %d", recorder.Code, test.wantStatus)
 			}
 		})
 	}

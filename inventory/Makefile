@@ -10,7 +10,22 @@ ENV_FILE := $(MODULE_DIR)/.env
 MIGRATIONS_DIR := $(MODULE_DIR)/internal/database/migrations
 DOTENV := $(GO) run github.com/joho/godotenv/cmd/godotenv
 
-.PHONY: test test-race migrate-test check-test-db vet check tools
+.PHONY: run migrate test test-race migrate-test check-test-db vet check tools
+
+run:
+	@cd "$(MODULE_DIR)" && \
+		$(DOTENV) -f "$(ENV_FILE)" \
+		$(GO) run ./cmd/api
+
+migrate: $(GOOSE)
+	@$(DOTENV) -f "$(ENV_FILE)" sh -eu -c '\
+		database_url="$${DATABASE_URI:-}"; \
+		if [ -z "$$database_url" ]; then \
+			echo "erro: DATABASE_URI não está definida" >&2; \
+			exit 1; \
+		fi; \
+		"$(GOOSE)" -dir "$(MIGRATIONS_DIR)" \
+		postgres "$$database_url" up'
 
 test: migrate-test
 	@cd "$(MODULE_DIR)" && \

@@ -5,6 +5,7 @@ import (
 	"e-commerce/inventory/internal/database"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -13,8 +14,9 @@ import (
 )
 
 type InventoryService struct {
-	pool    *pgxpool.Pool
-	queries *database.Queries
+	pool           *pgxpool.Pool
+	queries        *database.Queries
+	reservationTTL time.Duration
 }
 
 var ErrInventoryItemNotFound = errors.New("inventory item not found")
@@ -25,11 +27,14 @@ var ErrInvalidReservationInput = errors.New("invalid reservation input")
 var ErrReservationIdempotencyConflict = errors.New("reservation idempotency conflict")
 var ErrInventoryReservationNotFound = errors.New("inventory reservation not found")
 var ErrInventoryReservationTransitionConflict = errors.New("inventory reservation transition conflict")
+var ErrInventoryReservationExpired = errors.New("inventory reservation expired")
+var ErrInvalidExpirationBatchSize = errors.New("expiration batch size must be greater than zero")
 
-func NewInventoryService(pool *pgxpool.Pool) InventoryService {
+func NewInventoryService(pool *pgxpool.Pool, reservationTTL time.Duration) InventoryService {
 	return InventoryService{
-		pool:    pool,
-		queries: database.New(pool),
+		pool:           pool,
+		queries:        database.New(pool),
+		reservationTTL: reservationTTL,
 	}
 }
 
@@ -113,6 +118,7 @@ func (s InventoryService) CreateInventoryReservation(ctx context.Context, input 
 			OrderID:       input.OrderID,
 			SkuID:         input.SkuID,
 			Quantity:      input.Quantity,
+			TtlSeconds:    int64(s.reservationTTL / time.Second),
 		},
 	)
 	if err != nil {
@@ -171,10 +177,7 @@ func (s InventoryService) CreateInventoryReservation(ctx context.Context, input 
 	return reservation, nil
 }
 
-func (s InventoryService) ReleaseInventoryReservation(
-	ctx context.Context,
-	reservationID uuid.UUID,
-) (database.InventoryReservation, error) {
+func (s InventoryService) ReleaseInventoryReservation(ctx context.Context, reservationID uuid.UUID) (database.InventoryReservation, error) {
 	if reservationID == uuid.Nil {
 		return database.InventoryReservation{}, ErrInvalidReservationInput
 	}
@@ -228,4 +231,105 @@ func (s InventoryService) ReleaseInventoryReservation(
 				reservation.Status,
 			)
 	}
+}
+
+func (s InventoryService) ConfirmInventoryReservation(ctx context.Context, reservationID uuid.UUID) (database.InventoryReservation, error) {
+	if reservationID == uuid.Nil {
+		return database.InventoryReservation{}, ErrInvalidReservationInput
+	}
+
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return database.InventoryReservation{}, err
+	}
+	defer tx.Rollback(ctx)
+
+	txQueries := s.queries.WithTx(tx)
+	reservation, err := txQueries.GetInventoryReservationByIDForUpdate(ctx, reservationID)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return database.InventoryReservation{}, ErrInventoryReservationNotFound
+		}
+		return database.InventoryReservation{}, err
+	}
+
+	switch reservation.Status {
+	case database.InventoryReservationStatusConfirmed:
+		if err := tx.Commit(ctx); err != nil {
+			return database.InventoryReservation{}, err
+		}
+		return reservation, nil
+
+	case database.InventoryReservationStatusReleased:
+		return database.InventoryReservation{}, ErrInventoryReservationTransitionConflict
+
+	case database.InventoryReservationStatusActive:
+		confirmedReservation, err := txQueries.MarkInventoryReservationConfirmed(ctx, reservationID)
+		if err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return database.InventoryReservation{}, ErrInventoryReservationExpired
+			}
+			return database.InventoryReservation{}, err
+		}
+
+		_, err = txQueries.ConfirmReservedInventory(ctx, database.ConfirmReservedInventoryParams{
+			SkuID:    reservation.SkuID,
+			Quantity: reservation.Quantity,
+		})
+		if err != nil {
+			return database.InventoryReservation{}, err
+		}
+
+		if err := tx.Commit(ctx); err != nil {
+			return database.InventoryReservation{}, err
+		}
+		return confirmedReservation, nil
+
+	default:
+		return database.InventoryReservation{},
+			fmt.Errorf(
+				"unexpected inventory reservation status: %s",
+				reservation.Status,
+			)
+	}
+}
+
+type ExpiredReservationsBatchResult struct {
+	Selected  int
+	Processed int
+	Failed    int
+}
+
+func (s InventoryService) ProcessExpiredReservations(ctx context.Context, batchSize int32) (ExpiredReservationsBatchResult, error) {
+	if batchSize <= 0 {
+		return ExpiredReservationsBatchResult{}, ErrInvalidExpirationBatchSize
+	}
+	list, err := s.queries.ListExpiredActiveReservationIDs(ctx, batchSize)
+	if err != nil {
+		return ExpiredReservationsBatchResult{}, err
+	}
+	result := ExpiredReservationsBatchResult{
+		Selected: len(list),
+	}
+	var processingErrors []error
+
+	for _, reservationID := range list {
+		_, err := s.ReleaseInventoryReservation(ctx, reservationID)
+		if err != nil {
+			result.Failed++
+
+			processingErrors = append(
+				processingErrors,
+				fmt.Errorf(
+					"failed to process expired reservation %s: %w",
+					reservationID,
+					err,
+				),
+			)
+
+			continue
+		}
+		result.Processed++
+	}
+	return result, errors.Join(processingErrors...)
 }

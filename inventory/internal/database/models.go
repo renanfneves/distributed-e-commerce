@@ -69,4 +69,5 @@ type InventoryReservation struct {
 	CreatedAt     pgtype.Timestamptz         `json:"created_at"`
 	UpdatedAt     pgtype.Timestamptz         `json:"updated_at"`
 	OrderID       uuid.UUID                  `json:"order_id"`
+	ExpiresAt     pgtype.Timestamptz         `json:"expires_at"`
 }

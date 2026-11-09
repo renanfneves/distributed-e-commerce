@@ -8,6 +8,7 @@ import (
 	"errors"
 	"log"
 	"net/http"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/gorilla/mux"
@@ -43,6 +44,11 @@ type inventoryService interface {
 	) (database.InventoryReservation, error)
 
 	ReleaseInventoryReservation(
+		ctx context.Context,
+		reservationID uuid.UUID,
+	) (database.InventoryReservation, error)
+
+	ConfirmInventoryReservation(
 		ctx context.Context,
 		reservationID uuid.UUID,
 	) (database.InventoryReservation, error)
@@ -139,6 +145,20 @@ type InventoryReservationResponse struct {
 	SkuID         uuid.UUID `json:"sku_id"`
 	Quantity      int64     `json:"quantity"`
 	Status        string    `json:"status"`
+	ExpiresAt     time.Time `json:"expires_at"`
+}
+
+func newInventoryReservationResponse(
+	reservation database.InventoryReservation,
+) InventoryReservationResponse {
+	return InventoryReservationResponse{
+		ReservationID: reservation.ReservationID,
+		OrderID:       reservation.OrderID,
+		SkuID:         reservation.SkuID,
+		Quantity:      reservation.Quantity,
+		Status:        string(reservation.Status),
+		ExpiresAt:     reservation.ExpiresAt.Time,
+	}
 }
 
 func (h InventoryHandler) CreateInventoryReservation(w http.ResponseWriter, r *http.Request) {
@@ -171,13 +191,7 @@ func (h InventoryHandler) CreateInventoryReservation(w http.ResponseWriter, r *h
 		log.Printf("erro ao criar reserva de inventário: %v", err)
 		return
 	}
-	writeJSON(w, http.StatusCreated, InventoryReservationResponse{
-		ReservationID: response.ReservationID,
-		OrderID:       response.OrderID,
-		SkuID:         response.SkuID,
-		Quantity:      response.Quantity,
-		Status:        string(response.Status),
-	})
+	writeJSON(w, http.StatusCreated, newInventoryReservationResponse(response))
 
 }
 
@@ -206,11 +220,32 @@ func (h InventoryHandler) ReleaseInventoryReservation(w http.ResponseWriter, r *
 		w.WriteHeader(http.StatusInternalServerError)
 		return
 	}
-	writeJSON(w, http.StatusOK, InventoryReservationResponse{
-		ReservationID: reservation.ReservationID,
-		OrderID:       reservation.OrderID,
-		SkuID:         reservation.SkuID,
-		Quantity:      reservation.Quantity,
-		Status:        string(reservation.Status),
-	})
+	writeJSON(w, http.StatusOK, newInventoryReservationResponse(reservation))
+}
+
+func (h InventoryHandler) ConfirmInventoryReservation(w http.ResponseWriter, r *http.Request) {
+	reservationID, err := uuid.Parse(mux.Vars(r)["id"])
+	if err != nil || reservationID == uuid.Nil {
+		w.WriteHeader(http.StatusBadRequest)
+		return
+	}
+
+	reservation, err := h.service.ConfirmInventoryReservation(r.Context(), reservationID)
+	if err != nil {
+		switch {
+		case errors.Is(err, services.ErrInvalidReservationInput):
+			w.WriteHeader(http.StatusBadRequest)
+		case errors.Is(err, services.ErrInventoryReservationNotFound):
+			w.WriteHeader(http.StatusNotFound)
+		case errors.Is(err, services.ErrInventoryReservationTransitionConflict),
+			errors.Is(err, services.ErrInventoryReservationExpired):
+			w.WriteHeader(http.StatusConflict)
+		default:
+			log.Printf("erro ao confirmar reserva de inventário: %v", err)
+			w.WriteHeader(http.StatusInternalServerError)
+		}
+		return
+	}
+
+	writeJSON(w, http.StatusOK, newInventoryReservationResponse(reservation))
 }
