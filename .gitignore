@@ -16,3 +16,4 @@
 # Credenciais locais dos testes por microsserviço
 .env.test
 .env
+**/.env
